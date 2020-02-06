@@ -116,11 +116,12 @@ class Job(object):
                  'cause_of_death', 'num_resubmits', 'home_address',
                  'log_stderr_fn', 'log_stdout_fn', 'timestamp', 'host_name',
                  'heart_beat', 'track_mem', 'track_cpu', 'interpreting_shell',
-                 'copy_env','par_env')
+                 'copy_env','par_env', 'native_spec')
 
     def __init__(self, f, args, kwlist=None, cleanup=True, mem_free="1G",
                  name='gridmap_job', num_slots=1, queue=DEFAULT_QUEUE,
-                 interpreting_shell=None, copy_env=True, add_env=None, par_env=DEFAULT_PAR_ENV):
+                 interpreting_shell=None, copy_env=True, add_env=None,
+                 par_env=DEFAULT_PAR_ENV, native_spec=None):
         """
         Initializes a new Job.
 
@@ -197,6 +198,7 @@ class Job(object):
             _add_env(add_env)
         self.working_dir = os.getcwd()
         self.par_env = par_env
+        self.native_spec = native_spec
 
     def execute(self):
         """
@@ -232,6 +234,8 @@ class Job(object):
             ret += " -l h={}".format('|'.join(self.white_list))
         if self.queue:
             ret += " -q {}".format(self.queue)
+        if self.native_spec:
+            ret += " {}".format(self.native_spec)
 
         return ret
 
@@ -244,7 +248,7 @@ class JobMonitor(object):
     """
     Job monitor that communicates with other nodes via 0MQ.
     """
-    def __init__(self, temp_dir=DEFAULT_TEMP_DIR):
+    def __init__(self, port=None, temp_dir=DEFAULT_TEMP_DIR):
         """
         set up socket
         """
@@ -271,8 +275,13 @@ class JobMonitor(object):
         self.interface = "tcp://%s" % (self.ip_address)
 
         # bind to random port and remember it
-        self.port = self.socket.bind_to_random_port(self.interface)
-        self.home_address = "%s:%i" % (self.interface, self.port)
+        if port is None:
+            self.port = self.socket.bind_to_random_port(self.interface)
+            self.home_address = "%s:%i" % (self.interface, self.port)
+        else:
+            self.port = port
+            self.home_address = "%s:%i" % (self.interface, self.port)
+            self.socket.bind(self.home_address)
 
         self.logger.info("Setting up JobMonitor on %s", self.home_address)
 
@@ -807,7 +816,7 @@ def _append_job_to_session(session, job, temp_dir=DEFAULT_TEMP_DIR, quiet=True):
     session.deleteJobTemplate(jt)
 
 
-def process_jobs(jobs, temp_dir=DEFAULT_TEMP_DIR, white_list=None, quiet=True,
+def process_jobs(jobs, monitor_port=None, temp_dir=DEFAULT_TEMP_DIR, white_list=None, quiet=True,
                  max_processes=1, local=False, require_cluster=False):
     """
     Take a list of jobs and process them on the cluster.
@@ -845,7 +854,7 @@ def process_jobs(jobs, temp_dir=DEFAULT_TEMP_DIR, white_list=None, quiet=True,
 
     if not local:
         # initialize monitor to get port number
-        with JobMonitor(temp_dir=temp_dir) as monitor:
+        with JobMonitor(port=monitor_port, temp_dir=temp_dir) as monitor:
             # get interface and port
             home_address = monitor.home_address
 
@@ -893,7 +902,8 @@ def grid_map(f, args_list, cleanup=True, mem_free="1G", name='gridmap_job',
              num_slots=1, temp_dir=DEFAULT_TEMP_DIR, white_list=None,
              queue=DEFAULT_QUEUE, quiet=True, local=False, max_processes=1,
              interpreting_shell=None, copy_env=True, add_env=None,
-             completion_mail=False, require_cluster=False, par_env=DEFAULT_PAR_ENV):
+             completion_mail=False, require_cluster=False, par_env=DEFAULT_PAR_ENV,
+             native_spec=None, monitor_port=None):
     """
     Maps a function onto the cluster.
 
@@ -959,11 +969,13 @@ def grid_map(f, args_list, cleanup=True, mem_free="1G", name='gridmap_job',
                 cleanup=cleanup, mem_free=mem_free,
                 name='{}{}'.format(name, job_num), num_slots=num_slots,
                 queue=queue, interpreting_shell=interpreting_shell,
-                copy_env=copy_env, add_env=add_env, par_env=par_env)
+                copy_env=copy_env, add_env=add_env, par_env=par_env,
+                native_spec=native_spec)
             for job_num, args in enumerate(args_list)]
 
     # process jobs
-    job_results = process_jobs(jobs, temp_dir=temp_dir,
+    job_results = process_jobs(jobs, monitor_port=monitor_port,
+                               temp_dir=temp_dir,
                                white_list=white_list,
                                quiet=quiet, local=local,
                                max_processes=max_processes,
